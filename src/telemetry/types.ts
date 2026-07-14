@@ -79,11 +79,6 @@ export interface RunTelemetry {
   durationMs: number;
 
   /**
-   * Number of tool invocations during the run (a proxy for work done).
-   */
-  toolCalls: number;
-
-  /**
    * Ids of auth-gated connectors fully configured on this machine.
    */
   connectorsConfigured: string[];

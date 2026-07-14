@@ -93,7 +93,7 @@ export async function runOpenWikiAgent(
   await loadOpenWikiEnv();
 
   const telemetryStart = Date.now();
-  const stats: RunTelemetryStats = { toolCalls: 0, connectorsUsed: new Set() };
+  const stats: RunTelemetryStats = { connectorsUsed: new Set() };
 
   await ensureWriteConnectorSkill();
   emitDebug(options, "env=loaded ~/.openwiki/.env");
@@ -266,7 +266,6 @@ async function runOpenWikiAgentCore(
       const event = parseStreamEvent(chunk);
 
       if (event?.type === "tool_start") {
-        stats.toolCalls += 1;
         const connectorId = extractConnectorId(event.input);
         if (connectorId) {
           stats.connectorsUsed.add(connectorId);
@@ -382,7 +381,6 @@ async function recordRunSafe(
     outcome: facts.outcome,
     errorClass: facts.errorClass,
     durationMs: facts.durationMs,
-    toolCalls: facts.stats.toolCalls,
     connectorsConfigured: getConfiguredConnectorIds(),
     connectorsUsed: [...facts.stats.connectorsUsed],
     flags: ctx?.flags ?? [],

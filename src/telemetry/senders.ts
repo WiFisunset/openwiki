@@ -37,7 +37,6 @@ export async function recordRun(details: RunTelemetry): Promise<void> {
       outcome: details.outcome,
       ...(details.errorClass ? { error_class: details.errorClass } : {}),
       duration_ms: details.durationMs,
-      tool_calls: details.toolCalls,
       connectors_configured: details.connectorsConfigured,
       connectors_used: details.connectorsUsed,
       flags: details.flags,

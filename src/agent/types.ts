@@ -80,11 +80,6 @@ export interface RunTelemetryContext {
  */
 export interface RunTelemetryStats {
   /**
-   * Count of tool invocations seen so far this run.
-   */
-  toolCalls: number;
-
-  /**
    * Ids of connectors invoked this run.
    */
   connectorsUsed: Set<string>;
