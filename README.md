@@ -289,8 +289,9 @@ install ID stored locally in `~/.openwiki/install-id`:
 
 **What is never collected:** file contents, repository data or names,
 credentials, prompts, model output, connector payloads, error messages, file
-paths, URLs, your IP address, or any personal information. Geoip enrichment and
-person profiles are disabled on every event.
+paths, URLs, your IP address, or any personal information. Geoip enrichment is
+disabled and your IP is never stored. Events are grouped by your random install
+ID so we can measure repeat usage, but that ID contains no personal data.
 
 **Scheduled/CI runs** are collected as anonymous reliability data (success rate,
 latency, provider), but under a shared CI identifier, not a per-machine install

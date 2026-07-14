@@ -196,7 +196,9 @@ describe("client.capture", () => {
       properties: Record<string, unknown>;
     };
     expect(arg.disableGeoip).toBe(true);
-    expect(arg.properties.$process_person_profile).toBe(false);
+    // The client passes properties through untouched; the person-profile flag
+    // is set per-event by `send`, not here.
+    expect(arg.properties).not.toHaveProperty("$process_person_profile");
     expect(arg.properties).not.toHaveProperty("$ip");
     expect(posthog.shutdown).toHaveBeenCalledOnce();
   });
@@ -223,12 +225,17 @@ describe("senders.recordRun", () => {
     const tee = (await readTee(file)) as {
       ci: boolean;
       sent: boolean;
-      event: { distinctId: string; properties: { execution: string } };
+      event: {
+        distinctId: string;
+        properties: { execution: string; $process_person_profile: boolean };
+      };
     };
     expect(tee.ci).toBe(false);
     expect(tee.sent).toBe(true);
     expect(tee.event.distinctId).toMatch(/^[0-9a-f-]{36}$/i);
     expect(tee.event.properties.execution).toBe("print");
+    // Human runs are identified (person profile on) so retention works.
+    expect(tee.event.properties.$process_person_profile).toBe(true);
     expect(posthog.capture).toHaveBeenCalledOnce();
     await rm(file, { force: true });
   });
@@ -241,11 +248,16 @@ describe("senders.recordRun", () => {
 
     const tee = (await readTee(file)) as {
       ci: boolean;
-      event: { distinctId: string; properties: { execution: string } };
+      event: {
+        distinctId: string;
+        properties: { execution: string; $process_person_profile: boolean };
+      };
     };
     expect(tee.ci).toBe(true);
     expect(tee.event.distinctId).toBe("ci-unknown");
     expect(tee.event.properties.execution).toBe("ci");
+    // CI stays anonymous (no person profile).
+    expect(tee.event.properties.$process_person_profile).toBe(false);
     await rm(file, { force: true });
   });
 

@@ -28,11 +28,9 @@ export async function capture(event: TelemetryEvent): Promise<boolean> {
   client.capture({
     distinctId: event.distinctId,
     event: event.event,
-    properties: {
-      ...event.properties,
-      // Anonymous events: no PostHog person profile.
-      $process_person_profile: false,
-    },
+    // `$process_person_profile` is set per-event by the caller (`send`): on for
+    // human runs, off for CI. It travels in event.properties.
+    properties: event.properties,
     // No server-side geoip enrichment (no $geoip_* location). The raw client IP
     // is dropped by the project's "Discard client IP data" setting, not here:
     // it is added server-side, so no client-side option can strip it.

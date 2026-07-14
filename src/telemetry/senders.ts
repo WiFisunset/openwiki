@@ -129,6 +129,10 @@ async function send(
       properties: {
         ...properties,
         execution,
+        // Human runs are identified (enables retention/lifecycle); CI runs stay
+        // anonymous (the sentinel would collapse to one meaningless person, and
+        // this keeps the high-volume CI stream on the cheap event tier).
+        $process_person_profile: !ci,
       },
     };
     const sent = await capture(event);
@@ -138,13 +142,7 @@ async function send(
       ci,
       host: DEFAULT_POSTHOG_HOST,
       sent,
-      event: {
-        ...event,
-        properties: {
-          ...event.properties,
-          $process_person_profile: false,
-        },
-      },
+      event,
     });
   } catch {
     // Intentionally ignored: telemetry must never break a run.
