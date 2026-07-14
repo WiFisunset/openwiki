@@ -30,7 +30,11 @@ import {
   isTelemetryDisabled,
   noticeSuppressed,
 } from "../src/telemetry/gates.ts";
-import { recordRun } from "../src/telemetry/senders.ts";
+import {
+  recordAuth,
+  recordIngest,
+  recordRun,
+} from "../src/telemetry/senders.ts";
 import type { RunTelemetry } from "../src/telemetry/types.ts";
 
 const ENV_KEYS = [
@@ -263,5 +267,53 @@ describe("getConfiguredConnectorIds", () => {
 
     process.env.OPENWIKI_NOTION_MCP_ACCESS_TOKEN = "secret";
     expect(getConfiguredConnectorIds()).toContain("notion");
+  });
+});
+
+describe("recordAuth / recordIngest", () => {
+  function capturedEvent(): {
+    event: string;
+    properties: Record<string, unknown>;
+  } {
+    return posthog.capture.mock.calls[0]?.[0] as {
+      event: string;
+      properties: Record<string, unknown>;
+    };
+  }
+
+  test("recordAuth captures the auth event", async () => {
+    await recordAuth({
+      provider: "notion",
+      action: "oauth",
+      outcome: "success",
+    });
+
+    const arg = capturedEvent();
+    expect(arg.event).toBe("openwiki_auth");
+    expect(arg.properties).toMatchObject({
+      provider: "notion",
+      action: "oauth",
+      outcome: "success",
+      execution: "cli",
+    });
+  });
+
+  test("recordIngest captures the ingest event with source/scope", async () => {
+    await recordIngest({
+      source: "web-search",
+      scope: "source",
+      outcome: "success",
+      durationMs: 5,
+    });
+
+    const arg = capturedEvent();
+    expect(arg.event).toBe("openwiki_ingest");
+    expect(arg.properties).toMatchObject({
+      source: "web-search",
+      scope: "source",
+      outcome: "success",
+      duration_ms: 5,
+      execution: "cli",
+    });
   });
 });

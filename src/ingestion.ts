@@ -34,6 +34,28 @@ export type SourceInstanceTarget = {
   id: string;
 };
 
+/**
+ * Reduces an ingestion target to a telemetry-safe `{ source, scope }`. The
+ * source-instance `id` is user-chosen, so it is never returned; an instance's
+ * `source` is "unknown" here and the caller refines it from the ingestion result
+ * (a `ConnectorId` enum).
+ */
+export function describeIngestTarget(target: IngestionTarget): {
+  source: string;
+  scope: "all" | "source" | "instance";
+} {
+  if (target === "all") {
+    return { source: "all", scope: "all" };
+  }
+
+  if (typeof target === "string") {
+    // A ConnectorId enum value, safe to send as-is.
+    return { source: target, scope: "source" };
+  }
+
+  return { source: "unknown", scope: "instance" };
+}
+
 export type SourceIngestionResult = {
   agentResult?: OpenWikiRunResult;
   connectorId: ConnectorId;

@@ -11,6 +11,7 @@ import { startNgrokTunnel } from "./auth/ngrok.js";
 import { formatAuthProviderList, runOAuthAuth } from "./auth/oauth.js";
 import { ensureCodeModeRepoSetup } from "./code-mode.js";
 import {
+  commandEmitsTelemetry,
   helpContent,
   isDevelopmentMode,
   parseCommand,
@@ -45,6 +46,7 @@ import {
   type RunTelemetryContext,
 } from "./agent/types.js";
 import {
+  describeIngestTarget,
   runOpenWikiIngestion,
   type OpenWikiIngestionResult,
 } from "./ingestion.js";
@@ -79,6 +81,12 @@ import {
   type OpenWikiProvider,
 } from "./constants.js";
 import type { OpenWikiCommand, OpenWikiOutputMode } from "./agent/types.js";
+import {
+  recordAuth,
+  recordIngest,
+  classifyError,
+  showFirstRunNoticeIfNeeded,
+} from "./telemetry/index.js";
 
 type RunState =
   | { status: "idle" }
@@ -3449,6 +3457,12 @@ const command = await resolveStartupCommand(parsedCommand, {
   isStdinTTY: Boolean(process.stdin.isTTY),
 });
 
+if (commandEmitsTelemetry(command)) {
+  // Once per machine, before any event is sent. No-op when suppressed
+  // (opt-out or CI) and after the first run (install id already minted).
+  await showFirstRunNoticeIfNeeded();
+}
+
 if (command.kind === "auth") {
   await runAuthCommand(command);
 } else if (command.kind === "ngrok") {
@@ -3678,6 +3692,9 @@ function formatScheduleStatus(schedule: ConnectorScheduleStatus): string {
 async function runIngestCommand(
   command: Extract<CliCommand, { kind: "ingest" }>,
 ): Promise<void> {
+  const start = Date.now();
+  const { source, scope } = describeIngestTarget(command.target);
+
   try {
     const result = await runOpenWikiIngestion(process.cwd(), {
       debug: isDebugMode(),
@@ -3698,12 +3715,32 @@ async function runIngestCommand(
       );
     }
 
-    process.exitCode = result.results.some(
+    const hadError = result.results.some(
       (sourceResult) => sourceResult.status === "error",
-    )
-      ? 1
-      : 0;
+    );
+    // For an instance target, take the real connector id from the result (an
+    // enum) rather than the user-chosen instance id.
+    const resolvedSource =
+      scope === "instance"
+        ? (result.results[0]?.connectorId ?? source)
+        : source;
+
+    await recordIngest({
+      source: resolvedSource,
+      scope,
+      outcome: hadError ? "failure" : "success",
+      durationMs: Date.now() - start,
+    });
+
+    process.exitCode = hadError ? 1 : 0;
   } catch (error) {
+    await recordIngest({
+      source,
+      scope,
+      outcome: "failure",
+      errorClass: classifyError(error),
+      durationMs: Date.now() - start,
+    });
     process.stderr.write(`${getErrorMessage(error)}\n`);
     writePrintErrorDiagnostics(error);
     process.exitCode = 1;
@@ -3716,73 +3753,78 @@ async function runAuthCommand(
   try {
     if (command.action === "list") {
       process.stdout.write(`${formatAuthProviderList()}\n`);
-      process.exitCode = 0;
-      return;
-    }
-
-    if (command.provider === null) {
-      throw new Error("Auth provider is required.");
-    }
-
-    if (command.action === "configure") {
-      const result = await configureAuthProvider(command.provider, {
-        force: command.force,
-      });
-      process.stdout.write(
-        `${result.status === "exists" ? "Config already exists" : `Config ${result.status}`}: ${result.configPath}\n`,
-      );
-      for (const nextStep of result.nextSteps) {
-        process.stdout.write(`- ${nextStep}\n`);
+    } else {
+      if (command.provider === null) {
+        throw new Error("Auth provider is required.");
       }
-      process.exitCode = 0;
-      return;
-    }
 
-    if (command.action === "tools") {
-      const result = await listAuthProviderTools(command.provider);
-      process.stdout.write(
-        `Tools for ${result.provider} (${result.configPath})\n`,
-      );
-      process.stdout.write(`Wrote discovery: ${result.rawFile}\n`);
-      process.stdout.write(`${JSON.stringify(result.tools, null, 2)}\n`);
-      process.exitCode = 0;
-      return;
-    }
-
-    const result = await runOAuthAuth(command.provider);
-    process.stdout.write(
-      `Saved ${result.provider} auth values: ${result.savedEnvKeys.join(", ")}\n`,
-    );
-    const configureResult = await configureAuthProvider(command.provider, {
-      force: command.force,
-    });
-    process.stdout.write(
-      `${configureResult.status === "exists" ? "Config already exists" : `Config ${configureResult.status}`}: ${configureResult.configPath}\n`,
-    );
-    for (const nextStep of configureResult.nextSteps) {
-      process.stdout.write(`- ${nextStep}\n`);
-    }
-
-    if (shouldDiscoverToolsAfterAuth(command.provider)) {
-      try {
-        const toolsResult = await listAuthProviderTools(command.provider);
+      if (command.action === "configure") {
+        const result = await configureAuthProvider(command.provider, {
+          force: command.force,
+        });
         process.stdout.write(
-          `Discovered ${toolsResult.tools.length} MCP tool(s); wrote ${toolsResult.rawFile}\n`,
+          `${result.status === "exists" ? "Config already exists" : `Config ${result.status}`}: ${result.configPath}\n`,
         );
-        const toolNames = toolsResult.tools
-          .map((tool) => tool.name)
-          .slice(0, 20);
-        if (toolNames.length > 0) {
-          process.stdout.write(`Tools: ${toolNames.join(", ")}\n`);
+        for (const nextStep of result.nextSteps) {
+          process.stdout.write(`- ${nextStep}\n`);
         }
-      } catch (error) {
+      } else if (command.action === "tools") {
+        const result = await listAuthProviderTools(command.provider);
         process.stdout.write(
-          `MCP tool discovery skipped: ${getErrorMessage(error)}\n`,
+          `Tools for ${result.provider} (${result.configPath})\n`,
         );
+        process.stdout.write(`Wrote discovery: ${result.rawFile}\n`);
+        process.stdout.write(`${JSON.stringify(result.tools, null, 2)}\n`);
+      } else {
+        const result = await runOAuthAuth(command.provider);
+        process.stdout.write(
+          `Saved ${result.provider} auth values: ${result.savedEnvKeys.join(", ")}\n`,
+        );
+        const configureResult = await configureAuthProvider(command.provider, {
+          force: command.force,
+        });
+        process.stdout.write(
+          `${configureResult.status === "exists" ? "Config already exists" : `Config ${configureResult.status}`}: ${configureResult.configPath}\n`,
+        );
+        for (const nextStep of configureResult.nextSteps) {
+          process.stdout.write(`- ${nextStep}\n`);
+        }
+
+        if (shouldDiscoverToolsAfterAuth(command.provider)) {
+          try {
+            const toolsResult = await listAuthProviderTools(command.provider);
+            process.stdout.write(
+              `Discovered ${toolsResult.tools.length} MCP tool(s); wrote ${toolsResult.rawFile}\n`,
+            );
+            const toolNames = toolsResult.tools
+              .map((tool) => tool.name)
+              .slice(0, 20);
+            if (toolNames.length > 0) {
+              process.stdout.write(`Tools: ${toolNames.join(", ")}\n`);
+            }
+          } catch (error) {
+            process.stdout.write(
+              `MCP tool discovery skipped: ${getErrorMessage(error)}\n`,
+            );
+          }
+        }
       }
     }
+
+    // Single success record covering every sub-action (list/configure/tools/oauth).
+    await recordAuth({
+      provider: command.provider ?? "list",
+      action: command.action,
+      outcome: "success",
+    });
     process.exitCode = 0;
   } catch (error) {
+    await recordAuth({
+      provider: command.provider ?? "list",
+      action: command.action,
+      outcome: "failure",
+      errorClass: classifyError(error),
+    });
     process.stderr.write(`${getErrorMessage(error)}\n`);
     process.exitCode = 1;
   }
