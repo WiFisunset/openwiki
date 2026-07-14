@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 
 /**
- * Records a completed init/update/chat run. Never throws.
+ * Records a completed init/update run. Never throws. (Chat is not recorded.)
  */
 export async function recordRun(details: RunTelemetry): Promise<void> {
   const env = getTelemetryEnv();

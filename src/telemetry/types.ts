@@ -37,9 +37,11 @@ export type TelemetryExecution = TelemetryContext | "ci";
  */
 export interface RunTelemetry {
   /**
-   * Which run lifecycle produced this event.
+   * Which run lifecycle produced this event. Chat is deliberately excluded (it
+   * is interactive and would emit one event per turn), so only init and update
+   * ever produce an openwiki_run event.
    */
-  command: "init" | "update" | "chat";
+  command: "init" | "update";
 
   /**
    * Which brain the run targeted (code = repository, personal = local wiki).

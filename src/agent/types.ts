@@ -39,6 +39,7 @@ export type OpenWikiRunOptions = {
   outputMode?: OpenWikiOutputMode;
   threadId?: string;
   userMessage?: string | null;
+  telemetryContext?: RunTelemetryContext;
 };
 
 export type UpdateMetadata = {
@@ -53,3 +54,38 @@ export type RunContext = {
   gitSummary: string;
   wikiGoal?: string;
 };
+
+/**
+ * Invocation shape passed from the CLI for telemetry.
+ */
+export interface RunTelemetryContext {
+  /**
+   * Flag names present on the invocation, e.g. ["print","mode","model-id"].
+   */
+  flags: string[];
+
+  /**
+   * Whether this run is interactive (Ink UI) or one-shot print mode.
+   */
+  context: "interactive" | "print";
+
+  /**
+   * File target from --telemetry-file.
+   */
+  telemetryFile?: string;
+}
+
+/**
+ * Runtime counters the agent mutates during a run, read back for telemetry.
+ */
+export interface RunTelemetryStats {
+  /**
+   * Count of tool invocations seen so far this run.
+   */
+  toolCalls: number;
+
+  /**
+   * Ids of connectors invoked this run.
+   */
+  connectorsUsed: Set<string>;
+}
