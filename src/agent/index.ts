@@ -63,6 +63,16 @@ import {
   persistRunMetadataIfChanged,
   shouldCheckUpdateNoop,
 } from "./utils.js";
+import {
+  classifyError,
+  recordRun,
+  type TelemetryErrorClass,
+} from "../telemetry/index.js";
+import {
+  getConfiguredConnectorIds,
+  isConnectorId,
+} from "../connectors/registry.js";
+import type { RunTelemetryStats } from "./types.js";
 
 export async function runOpenWikiAgent(
   command: OpenWikiCommand,
@@ -81,6 +91,10 @@ export async function runOpenWikiAgent(
   emitDebug(options, `env.beforeLoad ${formatEnvironmentDebug()}`);
 
   await loadOpenWikiEnv();
+
+  const telemetryStart = Date.now();
+  const stats: RunTelemetryStats = { toolCalls: 0, connectorsUsed: new Set() };
+
   await ensureWriteConnectorSkill();
   emitDebug(options, "env=loaded ~/.openwiki/.env");
   emitDebug(options, `env.afterLoad ${formatEnvironmentDebug()}`);
@@ -94,6 +108,14 @@ export async function runOpenWikiAgent(
       emitDebug(options, `update.noop gitHead=${noopStatus.gitHead}`);
       options.onEvent?.({ type: "text", text: message });
 
+      await recordRunSafe(command, options, {
+        provider: resolveConfiguredProvider(),
+        modelId: noopStatus.model,
+        outcome: "noop",
+        durationMs: Date.now() - telemetryStart,
+        stats,
+      });
+
       return {
         command,
         model: noopStatus.model,
@@ -106,40 +128,67 @@ export async function runOpenWikiAgent(
     emitDebug(options, "update.noop=false reason=user message provided");
   }
 
-  const provider = resolveConfiguredProvider();
-  const providerBaseUrl = resolveProviderBaseUrl(provider);
-  emitDebug(options, `provider=${provider}`);
-  if (providerBaseUrl) {
-    emitDebug(options, `provider.baseUrl=${JSON.stringify(providerBaseUrl)}`);
-  }
-  ensureProviderKey(provider);
-  emitDebug(options, `credentials=${provider} key present`);
-  ensureProviderBaseUrl(provider);
-
-  if (provider === "openai-chatgpt") {
-    // Refresh before the model is built, so `createModel` stays synchronous.
-    await ensureFreshChatGptTokens();
-    emitDebug(options, "chatgpt.token=fresh");
-  }
-
-  const modelId = resolveModelId(options, provider);
-  emitDebug(options, `model=${modelId}`);
-  const providerRetryAttempts = resolveProviderRetryAttempts();
-  emitDebug(options, `provider.retryAttempts=${providerRetryAttempts}`);
-
   const debugFetchCapture = installOpenRouterDebugFetch(options);
 
+  // Resolved inside the try so a failure during resolution (missing key,
+  // invalid model, missing base URL) is still recorded. They may be undefined
+  // in the catch if resolution threw before assigning them.
+  let provider: OpenWikiProvider | undefined;
+  let modelId: string | undefined;
+
   try {
-    return await runOpenWikiAgentCore(
+    provider = resolveConfiguredProvider();
+    const providerBaseUrl = resolveProviderBaseUrl(provider);
+    emitDebug(options, `provider=${provider}`);
+    if (providerBaseUrl) {
+      emitDebug(options, `provider.baseUrl=${JSON.stringify(providerBaseUrl)}`);
+    }
+    ensureProviderKey(provider);
+    emitDebug(options, `credentials=${provider} key present`);
+    ensureProviderBaseUrl(provider);
+
+    if (provider === "openai-chatgpt") {
+      // Refresh before the model is built, so `createModel` stays synchronous.
+      await ensureFreshChatGptTokens();
+      emitDebug(options, "chatgpt.token=fresh");
+    }
+
+    modelId = resolveModelId(options, provider);
+    emitDebug(options, `model=${modelId}`);
+    const providerRetryAttempts = resolveProviderRetryAttempts();
+    emitDebug(options, `provider.retryAttempts=${providerRetryAttempts}`);
+
+    const result = await runOpenWikiAgentCore(
       command,
       runtimeCwd,
       options,
       provider,
       modelId,
       providerRetryAttempts,
+      stats,
     );
+
+    await recordRunSafe(command, options, {
+      provider,
+      modelId,
+      outcome: "success",
+      durationMs: Date.now() - telemetryStart,
+      stats,
+    });
+
+    return result;
   } catch (error) {
     attachOpenRouterDebugInfo(error, debugFetchCapture.getLastFailure());
+
+    await recordRunSafe(command, options, {
+      provider,
+      modelId,
+      outcome: "failure",
+      errorClass: classifyError(error),
+      durationMs: Date.now() - telemetryStart,
+      stats,
+    });
+
     throw error;
   } finally {
     debugFetchCapture.restore();
@@ -153,6 +202,7 @@ async function runOpenWikiAgentCore(
   provider: OpenWikiProvider,
   modelId: string,
   providerRetryAttempts: number,
+  stats: RunTelemetryStats,
 ): Promise<OpenWikiRunResult> {
   const outputMode = options.outputMode ?? "local-wiki";
   const context = await createRunContext(command, cwd, outputMode);
@@ -214,6 +264,14 @@ async function runOpenWikiAgentCore(
   try {
     for await (const chunk of stream) {
       const event = parseStreamEvent(chunk);
+
+      if (event?.type === "tool_start") {
+        stats.toolCalls += 1;
+        const connectorId = extractConnectorId(event.input);
+        if (connectorId) {
+          stats.connectorsUsed.add(connectorId);
+        }
+      }
 
       if (event) {
         options.onEvent?.(event);
@@ -280,6 +338,57 @@ async function runOpenWikiAgentCore(
     command,
     model: modelId,
   };
+}
+
+function extractConnectorId(input: unknown): string | undefined {
+  if (typeof input !== "object" || input === null) {
+    return undefined;
+  }
+  const value = (input as { connectorId?: unknown }).connectorId;
+  return typeof value === "string" && isConnectorId(value) ? value : undefined;
+}
+
+async function recordRunSafe(
+  command: OpenWikiCommand,
+  options: OpenWikiRunOptions,
+  facts: {
+    // Optional: a failure during provider/model resolution can happen before
+    // either is known, and we still want to record that failure.
+    provider?: OpenWikiProvider;
+    modelId?: string;
+    outcome: "success" | "failure" | "noop";
+    errorClass?: TelemetryErrorClass;
+    durationMs: number;
+    stats: RunTelemetryStats;
+  },
+): Promise<void> {
+  // Chat is deliberately not recorded: it is interactive and would emit one
+  // event per turn.
+  if (command !== "init" && command !== "update") {
+    return;
+  }
+
+  const outputMode = options.outputMode ?? "local-wiki";
+  const ctx = options.telemetryContext;
+
+  await recordRun({
+    command,
+    mode: outputMode === "repository" ? "code" : "personal",
+    provider: facts.provider ?? "unknown",
+    modelId: facts.modelId ?? "unknown",
+    baseUrlOverride: facts.provider
+      ? Boolean(resolveProviderBaseUrl(facts.provider))
+      : false,
+    outcome: facts.outcome,
+    errorClass: facts.errorClass,
+    durationMs: facts.durationMs,
+    toolCalls: facts.stats.toolCalls,
+    connectorsConfigured: getConfiguredConnectorIds(),
+    connectorsUsed: [...facts.stats.connectorsUsed],
+    flags: ctx?.flags ?? [],
+    context: ctx?.context ?? "interactive",
+    telemetryFile: ctx?.telemetryFile,
+  });
 }
 
 const checkpointPath = path.join(openWikiEnvDir, "openwiki.sqlite");
