@@ -76,7 +76,6 @@ function runDetails(overrides: Partial<RunTelemetry> = {}): RunTelemetry {
     baseUrlOverride: false,
     outcome: "success",
     durationMs: 1,
-    toolCalls: 0,
     connectorsConfigured: [],
     connectorsUsed: [],
     flags: [],
