@@ -57,6 +57,10 @@ For repository documentation in GitHub Actions, use
 long as the workflow provides the required provider and model environment
 variables.
 
+Scheduled/CI runs send anonymous reliability telemetry. See [Telemetry](#telemetry)
+for what is collected and how to turn it off (uncomment `OPENWIKI_TELEMETRY_DISABLED`
+in the example workflow).
+
 ## Usage
 
 Start the interactive CLI in code mode for the current repository:
@@ -264,6 +268,53 @@ OPENWIKI_PROVIDER_RETRY_ATTEMPTS=3
 The value must be a positive integer. If the value is unset, OpenWiki defaults to 3 retries.
 
 If there's an inference provider or model you'd like to see added, please open a PR!
+
+## Telemetry
+
+OpenWiki collects anonymous, aggregate usage data so we can understand how the
+tool is used and improve it. Telemetry is on by default and easy to turn off.
+
+**What is collected**, per event (`run`, `auth`, `ingest`), keyed by a random
+install ID stored locally in `~/.openwiki/install-id`:
+
+- Command run (init / update / auth / ingest) and which mode (code / personal).
+  Interactive chat is not recorded.
+- Provider and model ID, and whether a custom base URL is configured (never the
+  URL itself).
+- Outcome (success / failure / no-op) and, on failure, a coarse error category
+  (never the error message).
+- Duration and which connectors are configured and used (connector names only,
+  never their contents).
+- Coarse environment: OpenWiki version, OS family, CPU arch, Node version.
+
+**What is never collected:** file contents, repository data or names,
+credentials, prompts, model output, connector payloads, error messages, file
+paths, URLs, your IP address, or any personal information. Geoip enrichment and
+person profiles are disabled on every event.
+
+**Scheduled/CI runs** are collected as anonymous reliability data (success rate,
+latency, provider), but under a shared CI identifier, not a per-machine install
+ID, and never counted as distinct users. To disable in CI, set
+`OPENWIKI_TELEMETRY_DISABLED=1` in your workflow environment.
+
+### Opting out
+
+Set either environment variable:
+
+```sh
+export OPENWIKI_TELEMETRY_DISABLED=1
+# or the cross-tool standard:
+export DO_NOT_TRACK=1
+```
+
+To disable permanently, add `OPENWIKI_TELEMETRY_DISABLED=1` to `~/.openwiki/.env`.
+In CI, set it in the workflow environment (config files do not persist on
+ephemeral runners).
+
+### Seeing exactly what is sent
+
+Add `--telemetry-file=<path>` to any run to also write the exact payload to a
+local JSON file.
 
 ## Contributing
 
